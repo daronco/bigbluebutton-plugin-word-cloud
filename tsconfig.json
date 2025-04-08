@@ -8,7 +8,7 @@
         "allowJs": true,
         "moduleResolution": "node"
     },
-    "include": ["src/*"],
+    "include": ["src/**/*"], // Update to include subdirectories
     "paths": {
         "*": ["node_modules"]
     },

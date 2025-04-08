@@ -1,5 +1,5 @@
 {
-  "name": "plugin-hello-world",
+  "name": "plugin-chat-overlay",
   "version": "0.1.0",
   "private": true,
   "main": "./src/index.tsx",

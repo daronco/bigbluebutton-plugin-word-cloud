@@ -1,5 +1,5 @@
 {
   "requiredSdkVersion": "~0.1.2",
-  "name": "PluginHelloWorld",
-  "javascriptEntrypointUrl": "PluginHelloWorld.js"
+  "name": "PluginChatOverlay",
+  "javascriptEntrypointUrl": "PluginChatOverlay.js"
 }
