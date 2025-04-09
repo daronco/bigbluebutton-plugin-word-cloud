@@ -100,26 +100,14 @@ React.ReactElement<PluginWordCloudProps> {
   // --- D3 Word Cloud Logic ---
 
   // Define min/max font sizes
-  const minFontSize = 12;
-  const maxFontSize = 48;
+  const minFontSize = 24;
+  const maxFontSize = 98;
   // Color parameters removed - will use d3.schemeCategory10
 
   // Calculate min and max counts for normalization (still needed for font size)
   const counts = Object.values(wordCounts);
   const minCount = counts.length > 0 ? Math.min(...counts) : 1;
   const maxCount = counts.length > 0 ? Math.max(...counts) : 1;
-
-  // Helper function to calculate font size based on count
-  const calculateFontSize = (count: number): number => {
-    if (maxCount === minCount) {
-      return (minFontSize + maxFontSize) / 2; // Average size if all counts are the same
-    }
-    // Linear interpolation
-    const size = minFontSize + ((count - minCount) / (maxCount - minCount)) * (maxFontSize - minFontSize);
-    return Math.max(minFontSize, Math.min(size, maxFontSize)); // Clamp within bounds
-  };
-
-  // Removed the HSL-based calculateColor function
 
   // Define a categorical color scale using a bright scheme suitable for dark backgrounds
   const colorScale = d3.scaleOrdinal(d3.schemeCategory10);
@@ -199,11 +187,43 @@ React.ReactElement<PluginWordCloudProps> {
       return;
     }
 
+    // --- Dynamic Font Size Calculation ---
+    const numUniqueWords = Object.keys(wordCounts).length;
+    const wordCountThreshold = 20; // Threshold for adjusting min font size
+    let effectiveMinFontSize = minFontSize; // Start with the default min size
+
+    if (numUniqueWords > 0 && numUniqueWords < wordCountThreshold) {
+      // If fewer words than threshold, increase the minimum size
+      // Interpolate between minFontSize and a midpoint based on how few words there are
+      const midFontSize = (minFontSize + maxFontSize) / 2;
+      // boostFactor goes from 0 (at threshold-1 words) to 1 (at 1 word)
+      const boostFactor = (wordCountThreshold - numUniqueWords) / (wordCountThreshold - 1);
+      effectiveMinFontSize = minFontSize + (midFontSize - minFontSize) * boostFactor;
+      pluginLogger.debug(`Adjusted min font size to ${effectiveMinFontSize.toFixed(2)} for ${numUniqueWords} words.`);
+    }
+
+    // Calculate min/max counts for normalization (needed for font size scaling)
+    const counts = Object.values(wordCounts);
+    const minCount = counts.length > 0 ? Math.min(...counts) : 1;
+    const maxCount = counts.length > 0 ? Math.max(...counts) : 1;
+
+    // Define font size calculation logic *inside* the effect to use effectiveMinFontSize
+    const calculateDynamicFontSize = (count: number): number => {
+      if (maxCount === minCount) {
+        // If all counts are the same, use an average of the effective min and max
+        return (effectiveMinFontSize + maxFontSize) / 2;
+      }
+      // Linear interpolation between effectiveMinFontSize and maxFontSize
+      const size = effectiveMinFontSize + ((count - minCount) / (maxCount - minCount)) * (maxFontSize - effectiveMinFontSize);
+      // Clamp within the dynamic bounds (effectiveMinFontSize to maxFontSize)
+      return Math.max(effectiveMinFontSize, Math.min(size, maxFontSize));
+    };
+
     // Prepare data for d3-cloud, explicitly typing as WordData[]
     const wordsData: WordData[] = Object.entries(wordCounts).map(([text, count]) => ({
       text,
-      size: calculateFontSize(count), // Use existing font size calculation
-      count, // Keep original count for color calculation
+      size: calculateDynamicFontSize(count), // Use the new dynamic font size calculation
+      count, // Keep original count if needed elsewhere
       // Initialize d3-cloud properties (optional, layout calculates them)
       // x: 0, y: 0, rotate: 0,
     }));
@@ -211,10 +231,10 @@ React.ReactElement<PluginWordCloudProps> {
     const layout = cloud()
       .size([layoutWidth, layoutHeight]) // Use calculated layout size
       .words(wordsData)
-      .padding(5) // Padding between words
+      .padding(2) // Reduced padding for closer words
       //.rotate(() => ~~(Math.random() * 2) * 90) // Rotate words 0 or 90 degrees randomly
       .rotate(() => (~~(Math.random() * 6) - 3) * 30) // More varied rotation like original example
-      .font('Impact') // Example font, choose one appropriate
+      .font('Tahoma') // Example font, choose one appropriate
       .fontSize((d: cloud.Word) => d.size || 12) // Added explicit type cloud.Word for 'd'
       .on('end', (drawnWords: WordData[]) => draw(drawnWords, width, height, margin)); // Pass dimensions and margin to draw
 
@@ -298,6 +318,6 @@ React.ReactElement<PluginWordCloudProps> {
       }}
     />
   );
-}
+} // <-- Add missing closing brace for the PluginWordCloud function
 
 export default PluginWordCloud;
