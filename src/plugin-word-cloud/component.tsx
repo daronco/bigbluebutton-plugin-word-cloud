@@ -36,6 +36,8 @@ React.ReactElement<PluginWordCloudProps> {
   const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
   // Ref for the container div where D3 will render the SVG
   const svgRef = useRef<HTMLDivElement>(null);
+  // State to store container dimensions for responsive layout
+  const [dimensions, setDimensions] = useState<[number, number]>([0, 0]);
 
   const subscriptionResponse = pluginApi.useCustomSubscription<PublicChatMessagesData>(
     PUBLIC_CHAT_MESSAGES_SUBSCRIPTION,
@@ -97,16 +99,12 @@ React.ReactElement<PluginWordCloudProps> {
 
   // --- D3 Word Cloud Logic ---
 
-  // Define min/max font sizes and color parameters
+  // Define min/max font sizes
   const minFontSize = 12;
   const maxFontSize = 48;
-  const baseHue = 210; // Blue hue
-  const minSaturation = 20;
-  const maxSaturation = 95;
-  const minLightness = 75;
-  const maxLightness = 40;
+  // Color parameters removed - will use d3.schemeCategory10
 
-  // Calculate min and max counts for normalization
+  // Calculate min and max counts for normalization (still needed for font size)
   const counts = Object.values(wordCounts);
   const minCount = counts.length > 0 ? Math.min(...counts) : 1;
   const maxCount = counts.length > 0 ? Math.max(...counts) : 1;
@@ -121,47 +119,85 @@ React.ReactElement<PluginWordCloudProps> {
     return Math.max(minFontSize, Math.min(size, maxFontSize)); // Clamp within bounds
   };
 
-  // Helper function to calculate color based on count (interpolating Saturation and Lightness)
-  // Keep this function as it's useful for D3 fill style
-  const calculateColor = (count: number, minC: number, maxC: number): string => {
-    if (maxC === minC) {
-      // Average saturation and lightness if all counts are the same
-      const avgSaturation = (minSaturation + maxSaturation) / 2;
-      const avgLightness = (minLightness + maxLightness) / 2;
-      return `hsl(${baseHue}, ${avgSaturation}%, ${avgLightness}%)`;
-    }
-    // Linear interpolation for saturation and lightness
-    const fraction = (count - minC) / (maxC - minC);
-    const saturation = minSaturation + fraction * (maxSaturation - minSaturation);
-    const lightness = minLightness + fraction * (maxLightness - minLightness); // Note: Lightness decreases for darker colors
-    return `hsl(${baseHue}, ${Math.max(0, Math.min(saturation, 100))}%, ${Math.max(0, Math.min(lightness, 100))}%)`;
-  };
+  // Removed the HSL-based calculateColor function
 
-  // Effect to run D3 layout when wordCounts changes or container resizes (simplified resize handling)
+  // Define a categorical color scale using a bright scheme suitable for dark backgrounds
+  const colorScale = d3.scaleOrdinal(d3.schemeCategory10);
+
+  // Effect to setup ResizeObserver for responsive layout
   useEffect(() => {
-    if (!svgRef.current || Object.keys(wordCounts).length === 0) {
-      // Clear previous SVG if no words or ref not ready
-      if (svgRef.current) {
-        d3.select(svgRef.current).select('svg').remove();
-        // Optionally display "No messages yet" message here using D3
-        d3.select(svgRef.current)
-          .append('p')
-          .attr('class', 'no-messages-placeholder') // Add a class for styling
-          .style('color', '#666')
-          .style('font-size', '16px')
-          .style('text-align', 'center')
-          .style('margin-top', '20px')
-          .text('No messages yet.');
-      }
-      return; // Exit if no words or container not ready
+    if (!svgRef.current) return;
+
+    const resizeObserver = new ResizeObserver(entries => {
+      if (!entries || entries.length === 0) return;
+      const { width, height } = entries[0].contentRect;
+      setDimensions([width, height]);
+      pluginLogger.debug(`Resized to: ${width}x${height}`);
+    });
+
+    resizeObserver.observe(svgRef.current);
+
+    // Set initial dimensions
+    const { clientWidth, clientHeight } = svgRef.current;
+    setDimensions([clientWidth, clientHeight]);
+    pluginLogger.debug(`Initial dimensions: ${clientWidth}x${clientHeight}`);
+
+
+    // Cleanup observer on component unmount
+    return () => resizeObserver.disconnect();
+  }, []); // Empty dependency array ensures this runs only once on mount
+
+  // Effect to run D3 layout when wordCounts or dimensions change
+  useEffect(() => {
+    const [width, height] = dimensions; // Get current dimensions from state
+
+    if (!svgRef.current || width === 0 || height === 0) {
+      pluginLogger.debug('Skipping D3 layout: No ref or zero dimensions');
+      return; // Don't run if ref isn't ready or dimensions are zero
     }
 
-    // Clear any placeholder message
-    d3.select(svgRef.current).select('.no-messages-placeholder').remove();
+    if (Object.keys(wordCounts).length === 0) {
+      // Handle the "no words" case - draw placeholder
+      pluginLogger.debug('No words, drawing placeholder.');
+      // Remove any existing SVG (either word cloud or placeholder)
+      d3.select(svgRef.current).select('svg').remove();
 
-    const container = svgRef.current;
-    const width = container.clientWidth;
-    const height = container.clientHeight;
+      // Create a placeholder SVG with centered text using current dimensions
+      const placeholderSvg = d3.select(svgRef.current)
+        .append('svg')
+          .attr('width', width)
+          .attr('height', height)
+          .attr('class', 'no-messages-placeholder-svg') // Add class to SVG for removal
+          .style('background-color', '#000000'); // Match background
+
+      placeholderSvg.append('text')
+        .attr('x', width / 2)
+        .attr('y', height / 2)
+        .attr('dy', '0.35em') // Adjust vertical alignment slightly
+        .style('fill', '#ccc') // Light gray color for dark background
+        .style('font-size', '24px')
+        .style('text-anchor', 'middle') // Center text horizontally
+        .text('Type something in chat!');
+
+      return; // Exit after drawing placeholder
+    }
+
+    // --- Proceed with Word Cloud Drawing ---
+    pluginLogger.debug(`Running D3 layout with dimensions: ${width}x${height}`);
+
+    // Clear any placeholder SVG if it exists
+    d3.select(svgRef.current).select('.no-messages-placeholder-svg').remove();
+
+    // Define margin and calculate layout area
+    const margin = 10; // Define margin in pixels
+    const layoutWidth = width - margin * 2;
+    const layoutHeight = height - margin * 2;
+
+    // Ensure layout dimensions are not negative
+    if (layoutWidth <= 0 || layoutHeight <= 0) {
+      pluginLogger.warn('Layout dimensions too small or negative, skipping draw.');
+      return;
+    }
 
     // Prepare data for d3-cloud, explicitly typing as WordData[]
     const wordsData: WordData[] = Object.entries(wordCounts).map(([text, count]) => ({
@@ -172,25 +208,20 @@ React.ReactElement<PluginWordCloudProps> {
       // x: 0, y: 0, rotate: 0,
     }));
 
-    // Find min/max counts again for color calculation within this scope
-    const currentCounts = wordsData.map(d => d.count);
-    const currentMinCount = currentCounts.length > 0 ? Math.min(...currentCounts) : 1;
-    const currentMaxCount = currentCounts.length > 0 ? Math.max(...currentCounts) : 1;
-
     const layout = cloud()
-      .size([width, height])
+      .size([layoutWidth, layoutHeight]) // Use calculated layout size
       .words(wordsData)
       .padding(5) // Padding between words
-      // .rotate(() => ~~(Math.random() * 2) * 90) // Rotate words 0 or 90 degrees randomly
+      //.rotate(() => ~~(Math.random() * 2) * 90) // Rotate words 0 or 90 degrees randomly
       .rotate(() => (~~(Math.random() * 6) - 3) * 30) // More varied rotation like original example
       .font('Impact') // Example font, choose one appropriate
-      .fontSize((d: cloud.Word) => d.size || 10) // Added explicit type cloud.Word for 'd'
-      .on('end', draw); // Callback function after layout finishes
+      .fontSize((d: cloud.Word) => d.size || 12) // Added explicit type cloud.Word for 'd'
+      .on('end', (drawnWords: WordData[]) => draw(drawnWords, width, height, margin)); // Pass dimensions and margin to draw
 
     layout.start();
 
-    // Draw function: Renders the words using D3, using our extended WordData interface
-    function draw(words: WordData[]) {
+    // Draw function: Renders the words using D3, now receives dimensions/margin
+    function draw(words: WordData[], svgWidth: number, svgHeight: number, svgMargin: number) {
       pluginLogger.debug('D3 layout finished, drawing words:', words.length);
 
       // Select the container, ensure SVG exists, or create it
@@ -198,15 +229,15 @@ React.ReactElement<PluginWordCloudProps> {
         .selectAll<SVGSVGElement, unknown>('svg') // Use selectAll for potential existing SVG
         .data([null]) // Bind data to ensure only one SVG
         .join('svg') // Use join for enter/update/exit logic on the SVG itself
-          .attr('width', width)
-          .attr('height', height)
-          .style('background-color', '#f8f8f8'); // Set background on SVG
+          .attr('width', svgWidth) // Use passed width
+          .attr('height', svgHeight) // Use passed height
+          .style('background-color', '#000000'); // Set background to black
 
-      // Select the main group element, translate to center
+      // Select the main group element, translate by the margin
       const g = svg.selectAll<SVGGElement, unknown>('g')
         .data([null])
         .join('g')
-          .attr('transform', `translate(${width / 2},${height / 2})`);
+          .attr('transform', `translate(${width/2}, ${height/2})`); // Translate by margin
 
       // D3 data join for text elements, using WordData
       const text = g.selectAll<SVGTextElement, WordData>('text')
@@ -215,30 +246,31 @@ React.ReactElement<PluginWordCloudProps> {
       // --- Exit Selection ---
       text.exit()
         .transition() // Fade out words that are no longer present
-        .duration(800) // Match previous transition duration
+        .duration(1600) // Match previous transition duration
         .style('fill-opacity', 1e-6)
         .attr('font-size', 1)
         .remove();
 
       // --- Update Selection ---
       text.transition() // Smoothly transition existing words
-        .duration(800) // Match previous transition duration
+        .duration(1600) // Match previous transition duration
         .attr('transform', d => `translate(${d.x || 0},${d.y || 0}) rotate(${d.rotate || 0})`) // Add fallbacks for safety
         .attr('font-size', d => `${d.size}px`)
-        .style('fill', d => calculateColor(d.count, currentMinCount, currentMaxCount)); // Access d.count directly
+        .style('fill', d => colorScale(d.text || '')); // Use color scale based on word text
 
       // --- Enter Selection ---
-      text.enter() // Ensure text.enter() is called correctly
+      text.enter() // Add text.enter() back here
         .append('text')
           .style('font-family', 'Impact') // Match font used in layout
-          .style('fill', (d: WordData) => calculateColor(d.count, currentMinCount, currentMaxCount)) // Add type WordData
+          .style('fill', (d: WordData) => colorScale(d.text || '')) // Use color scale based on word text
           .attr('text-anchor', 'middle')
           .attr('transform', (d: WordData) => `translate(${d.x || 0},${d.y || 0}) rotate(${d.rotate || 0})`) // Add type WordData
           .text((d: WordData) => d.text || '') // Add type WordData
           // Initial state for transition
+          .style('fill-opacity', 1e-6) // Start transparent for fade-in
           .attr('font-size', 1)
         .transition() // Fade in and grow new words
-          .duration(800) // Match previous transition duration
+          .duration(1600) // Match previous transition duration
           .style('fill-opacity', 1)
           .attr('font-size', (d: WordData) => `${d.size}px`); // Add type WordData
 
@@ -251,7 +283,7 @@ React.ReactElement<PluginWordCloudProps> {
       pluginLogger.debug('D3 layout stopped on cleanup.');
     };
 
-  }, [wordCounts]); // Re-run effect when wordCounts changes
+  }, [wordCounts, dimensions]); // Re-run effect when wordCounts or dimensions change
 
   // --- Rendering Logic ---
   // Render a div container that D3 will use
