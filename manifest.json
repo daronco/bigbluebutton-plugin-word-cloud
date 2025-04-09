@@ -1,5 +1,5 @@
 {
   "requiredSdkVersion": "~0.1.2",
-  "name": "PluginChatOverlay",
-  "javascriptEntrypointUrl": "PluginChatOverlay.js"
+  "name": "PluginWordCloud",
+  "javascriptEntrypointUrl": "PluginWordCloud.js"
 }

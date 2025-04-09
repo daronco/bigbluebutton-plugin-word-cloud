@@ -8,7 +8,7 @@ import {
 } from './types';
 import { PUBLIC_CHAT_MESSAGES_SUBSCRIPTION } from './queries';
 
-interface PluginChatOverlayProps {
+interface PluginWordCloudProps {
   pluginUuid: string;
 }
 
@@ -20,8 +20,8 @@ const extractWords = (text: string): string[] => {
   return text.toLowerCase().replace(/[.,!?;:]/g, '').split(/\s+/).filter(word => word.length > 0);
 };
 
-function PluginChatOverlay({ pluginUuid }: PluginChatOverlayProps):
-React.ReactElement<PluginChatOverlayProps> {
+function PluginWordCloud({ pluginUuid }: PluginWordCloudProps):
+React.ReactElement<PluginWordCloudProps> {
   BbbPluginSdk.initialize(pluginUuid);
   const pluginApi = BbbPluginSdk.getPluginApi(pluginUuid);
 
@@ -154,4 +154,4 @@ React.ReactElement<PluginChatOverlayProps> {
   );
 }
 
-export default PluginChatOverlay;
+export default PluginWordCloud;

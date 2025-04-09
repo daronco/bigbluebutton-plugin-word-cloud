@@ -1,5 +1,5 @@
 {
-  "name": "plugin-chat-overlay",
+  "name": "plugin-word-cloud",
   "version": "0.1.0",
   "private": true,
   "main": "./src/index.tsx",

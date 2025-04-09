@@ -5,8 +5,8 @@ const path = require('path');
 module.exports = {
   entry: './src/index.tsx',
   output: {
-    filename: 'PluginChatOverlay.js',
-    library: 'PluginChatOverlay',
+    filename: 'PluginWordCloud.js',
+    library: 'PluginWordCloud',
     libraryTarget: 'umd',
     publicPath: '/',
     globalObject: 'this',
