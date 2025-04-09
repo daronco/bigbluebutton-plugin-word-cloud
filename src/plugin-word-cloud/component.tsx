@@ -1,6 +1,6 @@
 import { BbbPluginSdk, pluginLogger } from 'bigbluebutton-html-plugin-sdk';
 import * as React from 'react';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react'; // Removed useRef
 
 import {
   PublicChatMessagesData,
@@ -12,8 +12,7 @@ interface PluginWordCloudProps {
   pluginUuid: string;
 }
 
-const WORD_DISPLAY_DURATION_MS = 10000;
-const MESSAGE_MAX_AGE_MS = 60000;
+// Removed WORD_DISPLAY_DURATION_MS and MESSAGE_MAX_AGE_MS
 
 const extractWords = (text: string): string[] => {
   if (!text) return [];
@@ -25,99 +24,73 @@ React.ReactElement<PluginWordCloudProps> {
   BbbPluginSdk.initialize(pluginUuid);
   const pluginApi = BbbPluginSdk.getPluginApi(pluginUuid);
 
-  const [activeMessages, setActiveMessages] = useState<Array<{ id: string; content: React.ReactNode }>>([]);
-  const [processedMessageIds, setProcessedMessageIds] = useState<string[]>([]);
-  const messageTimeoutsRef = useRef<Record<string, NodeJS.Timeout>>({});
+  // State to store word counts
+  const [wordCounts, setWordCounts] = useState<Record<string, number>>({});
+  // State to keep track of processed message IDs to avoid duplicates
+  const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
 
   const subscriptionResponse = pluginApi.useCustomSubscription<PublicChatMessagesData>(
     PUBLIC_CHAT_MESSAGES_SUBSCRIPTION,
   );
-  const userListBasicInf = pluginApi.useUsersBasicInfo();
+  // Removed userListBasicInf hook as sender info is not needed for word counts
+
+  // Removed useEffect for clearing timeouts
 
   useEffect(() => {
-    return () => {
-      Object.values(messageTimeoutsRef.current).forEach(clearTimeout);
-    };
-  }, []);
+    pluginLogger.debug('Subscription data received:', subscriptionResponse.data);
 
-  useEffect(() => {
-    pluginLogger.info('+++++ sub response: ', subscriptionResponse.data?.chat_message_public);
-    pluginLogger.info('+++++ userListBasicInf.data: ', userListBasicInf.data);
-
-    // Check if the subscription data and user list data are available
-    // Also check if the chat_message_public array exists and has elements
+    // Check if the subscription data is available and contains messages
     if (subscriptionResponse.data?.chat_message_public &&
-        Array.isArray(subscriptionResponse.data.chat_message_public) &&
-        subscriptionResponse.data.chat_message_public.length > 0 &&
-        userListBasicInf.data?.user) {
+        Array.isArray(subscriptionResponse.data.chat_message_public)) {
 
-      // Access the *last* message from the array, assuming it's the newest
-      const newMessage = subscriptionResponse.data.chat_message_public.at(-1);
+      const newMessages = subscriptionResponse.data.chat_message_public;
+      let updated = false; // Flag to track if wordCounts was updated
 
-      // Check if the extracted message object is valid
-      if (!newMessage || !newMessage.messageId) {
-        pluginLogger.debug('Subscription update without a valid message object:', newMessage);
-        return;
-      }
-
-      // Destructure directly from the newMessage object
-      const { messageId, message: messageText, senderId, createdAt, senderName: messageSenderName } = newMessage;
-      const messageTime = new Date(createdAt).getTime(); // Assuming createdAt is a format Date can parse
-      const messageCutoffTime = Date.now() - MESSAGE_MAX_AGE_MS;
-
-      // Check if message is too old or already processed
-      if (messageTime < messageCutoffTime || processedMessageIds.includes(messageId)) {
-        pluginLogger.debug(`Skipping message ${messageId}: Old or already processed.`);
-        return;
-      }
-
-      // Use the senderName directly from the message if available, otherwise look up
-      const sender = userListBasicInf.data.user.find(u => u.userId === senderId);
-      const senderName = messageSenderName || sender?.name || '???'; // Prioritize name from message
-
-      pluginLogger.info('Processing new message event:', newMessage);
-      pluginLogger.info(`Received message from ${senderName} (${senderId}): ${messageText}`);
-      const words = extractWords(messageText); // Note: 'words' is extracted but not used currently. Keep or remove based on future needs.
-
-      if (messageText) {
-        const formattedMessage = (
-          <>
-            <strong>{senderName}:</strong> {messageText}
-          </>
-        );
-
-        setActiveMessages((prevMessages) => [
-          ...prevMessages,
-          { id: messageId, content: formattedMessage },
-        ]);
-
-        setProcessedMessageIds(prevIds => [messageId, ...prevIds].slice(0, 5));
-
-        if (messageTimeoutsRef.current[messageId]) {
-          clearTimeout(messageTimeoutsRef.current[messageId]);
+      newMessages.forEach(message => {
+        // Check if the message object and ID are valid and if it hasn't been processed yet
+        if (!message || !message.messageId || processedMessageIds.has(message.messageId)) {
+          if (message?.messageId && processedMessageIds.has(message.messageId)) {
+            pluginLogger.debug(`Skipping already processed message ${message.messageId}`);
+          } else {
+            pluginLogger.debug('Skipping invalid or already processed message:', message);
+          }
+          return; // Skip this message
         }
 
-        messageTimeoutsRef.current[messageId] = setTimeout(() => {
-          removeMessage(messageId);
-        }, WORD_DISPLAY_DURATION_MS);
-      } else {
-        pluginLogger.warn('Received chat message event without valid text:', newMessage);
+        const { messageId, message: messageText } = message;
+
+        // Mark message as processed immediately
+        setProcessedMessageIds(prevIds => new Set(prevIds).add(messageId));
+        updated = true; // Mark that we are processing new data
+
+        pluginLogger.info(`Processing message ${messageId}: ${messageText}`);
+        const words = extractWords(messageText);
+
+        if (words.length > 0) {
+          // Update word counts using functional update
+          setWordCounts(prevCounts => {
+            const newCounts = { ...prevCounts };
+            words.forEach(word => {
+              newCounts[word] = (newCounts[word] || 0) + 1;
+            });
+            return newCounts;
+          });
+        } else {
+          pluginLogger.debug(`No words extracted from message ${messageId}`);
+        }
+      });
+
+      if (updated) {
+        pluginLogger.info('Word counts updated.');
       }
     }
-    // Depend on the data part of the response/info objects for better performance
-  }, [subscriptionResponse.data, userListBasicInf.data, processedMessageIds]);
+    // Depend only on the subscription data
+  }, [subscriptionResponse.data]); // Removed processedMessageIds from dependencies
 
-  const removeMessage = (messageIdToRemove: string) => {
-    setActiveMessages((prevMessages) =>
-      prevMessages.filter((msg) => msg.id !== messageIdToRemove)
-    );
-    if (messageTimeoutsRef.current[messageIdToRemove]) {
-      clearTimeout(messageTimeoutsRef.current[messageIdToRemove]);
-      delete messageTimeoutsRef.current[messageIdToRemove];
-    }
-  };
+  // Removed removeMessage function
 
-  const messageListContainerStyle: React.CSSProperties = {
+  // Adjusted styles for displaying word counts
+  const wordCountContainerStyle: React.CSSProperties = {
     position: 'fixed',
     bottom: '70px',
     left: '140px',
@@ -125,31 +98,45 @@ React.ReactElement<PluginWordCloudProps> {
     flexDirection: 'column',
     alignItems: 'flex-start',
     zIndex: 1000,
-    maxWidth: '40%',
-    pointerEvents: 'none',
+    maxWidth: '300px', // Adjusted width
+    maxHeight: '400px', // Added max height
+    overflowY: 'auto', // Added scroll for overflow
+    backgroundColor: 'rgba(255, 255, 255, 0.9)', // Lighter background
+    color: 'black', // Darker text
+    padding: '15px',
+    borderRadius: '10px',
+    boxShadow: '0 4px 8px rgba(0, 0, 0, 0.2)',
+    fontSize: '1em', // Adjusted font size
+    // zIndex: 1000, // Removed duplicate zIndex
+    pointerEvents: 'auto', // Allow interaction
   };
 
-  const messageBubbleStyle: React.CSSProperties = {
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    color: 'white',
-    padding: '8px 15px',
-    borderRadius: '15px',
-    boxShadow: '0 2px 5px rgba(0, 0, 0, 0.3)',
-    marginTop: '8px',
-    fontSize: '1.2em',
-    textAlign: 'left',
-    pointerEvents: 'auto',
-    width: 'fit-content',
-    maxWidth: '100%',
+  const wordEntryStyle: React.CSSProperties = {
+    marginBottom: '5px',
+    borderBottom: '1px solid #eee',
+    paddingBottom: '5px',
+    display: 'flex',
+    justifyContent: 'space-between',
   };
+
+  // Sort words by count descending for display
+  const sortedWordEntries = Object.entries(wordCounts).sort(([, countA], [, countB]) => countB - countA);
 
   return (
-    <div style={messageListContainerStyle}>
-      {activeMessages.map((msg) => (
-        <div key={msg.id} style={messageBubbleStyle}>
-          {msg.content}
-        </div>
-      ))}
+    <div style={wordCountContainerStyle}>
+      <h3 style={{ marginTop: 0, borderBottom: '2px solid #ccc', paddingBottom: '10px' }}>Word Cloud</h3>
+      {sortedWordEntries.length === 0 ? (
+        <p>No messages yet.</p>
+      ) : (
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          {sortedWordEntries.map(([word, count]) => (
+            <li key={word} style={wordEntryStyle}>
+              <span>{word}</span>
+              <strong>{count}</strong>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
