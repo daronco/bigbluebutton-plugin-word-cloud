@@ -5,21 +5,16 @@ import { useEffect, useState } from 'react'; // Removed useRef
 import {
   PublicChatMessagesData,
   ChatMessage,
+  PluginWordCloudProps,
 } from './types';
 import { PUBLIC_CHAT_MESSAGES_SUBSCRIPTION } from './queries';
-
-interface PluginWordCloudProps {
-  pluginUuid: string;
-}
-
-// Removed WORD_DISPLAY_DURATION_MS and MESSAGE_MAX_AGE_MS
 
 const extractWords = (text: string): string[] => {
   if (!text) return [];
   return text.toLowerCase().replace(/[.,!?;:]/g, '').split(/\s+/).filter(word => word.length > 0);
 };
 
-function PluginWordCloud({ pluginUuid }: PluginWordCloudProps):
+export function PluginWordCloud({ pluginUuid }: PluginWordCloudProps):
 React.ReactElement<PluginWordCloudProps> {
   BbbPluginSdk.initialize(pluginUuid);
   const pluginApi = BbbPluginSdk.getPluginApi(pluginUuid);
@@ -91,24 +86,9 @@ React.ReactElement<PluginWordCloudProps> {
 
   // Adjusted styles for displaying word counts
   const wordCountContainerStyle: React.CSSProperties = {
-    position: 'fixed',
-    bottom: '70px',
-    left: '140px',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'flex-start',
-    zIndex: 1000,
-    maxWidth: '300px', // Adjusted width
-    maxHeight: '400px', // Added max height
-    overflowY: 'auto', // Added scroll for overflow
-    backgroundColor: 'rgba(255, 255, 255, 0.9)', // Lighter background
-    color: 'black', // Darker text
-    padding: '15px',
-    borderRadius: '10px',
-    boxShadow: '0 4px 8px rgba(0, 0, 0, 0.2)',
-    fontSize: '1em', // Adjusted font size
-    // zIndex: 1000, // Removed duplicate zIndex
-    pointerEvents: 'auto', // Allow interaction
+    background: 'white',
+    width: '100%',
+    height: '100%',
   };
 
   const wordEntryStyle: React.CSSProperties = {

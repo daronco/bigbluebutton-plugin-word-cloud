@@ -11,3 +11,7 @@ export interface PublicChatMessagesData {
   // and contains an array of ChatMessage objects
   chat_message_public: ChatMessage[];
 }
+
+export interface PluginWordCloudProps {
+  pluginUuid: string;
+}

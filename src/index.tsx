@@ -1,6 +1,6 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom/client';
-import PluginWordCloud from './plugin-word-cloud/component'; // Path updated for rename
+import PluginWordCloud from './plugin-word-cloud-main-item/component'; // Path updated for rename
 
 const uuid = document.currentScript?.getAttribute('uuid') || 'root';
 
