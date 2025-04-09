@@ -20,27 +20,92 @@ const extractWords = (text: string): string[] => {
   return text.toLowerCase().replace(/[.,!?;:]/g, '').split(/\s+/).filter(word => word.length > 0);
 };
 
-function PluginChatOverlay(
-  { pluginUuid }: PluginChatOverlayProps,
-): React.ReactElement<PluginChatOverlayProps> {
+function PluginChatOverlay({ pluginUuid }: PluginChatOverlayProps):
+React.ReactElement<PluginChatOverlayProps> {
   BbbPluginSdk.initialize(pluginUuid);
   const pluginApi = BbbPluginSdk.getPluginApi(pluginUuid);
 
-  const meetingInfoGraphqlResponse = pluginApi.useMeeting();
-
-  const response = pluginApi.useLoadedChatMessages();
-  const userListBasicInf = pluginApi.useUsersBasicInfo();
-
-  const [displayedWords, setDisplayedWords] = useState<string[]>([]);
   const [activeMessages, setActiveMessages] = useState<Array<{ id: string; content: React.ReactNode }>>([]);
   const [processedMessageIds, setProcessedMessageIds] = useState<string[]>([]);
   const messageTimeoutsRef = useRef<Record<string, NodeJS.Timeout>>({});
+
+  const subscriptionResponse = pluginApi.useCustomSubscription<PublicChatMessagesData>(
+    PUBLIC_CHAT_MESSAGES_SUBSCRIPTION,
+  );
+  const userListBasicInf = pluginApi.useUsersBasicInfo();
 
   useEffect(() => {
     return () => {
       Object.values(messageTimeoutsRef.current).forEach(clearTimeout);
     };
   }, []);
+
+  useEffect(() => {
+    pluginLogger.info('+++++ sub response: ', subscriptionResponse.data?.chat_message_public);
+    pluginLogger.info('+++++ userListBasicInf.data: ', userListBasicInf.data);
+
+    // Check if the subscription data and user list data are available
+    // Also check if the chat_message_public array exists and has elements
+    if (subscriptionResponse.data?.chat_message_public &&
+        Array.isArray(subscriptionResponse.data.chat_message_public) &&
+        subscriptionResponse.data.chat_message_public.length > 0 &&
+        userListBasicInf.data?.user) {
+
+      // Access the *last* message from the array, assuming it's the newest
+      const newMessage = subscriptionResponse.data.chat_message_public.at(-1);
+
+      // Check if the extracted message object is valid
+      if (!newMessage || !newMessage.messageId) {
+        pluginLogger.debug('Subscription update without a valid message object:', newMessage);
+        return;
+      }
+
+      // Destructure directly from the newMessage object
+      const { messageId, message: messageText, senderId, createdAt, senderName: messageSenderName } = newMessage;
+      const messageTime = new Date(createdAt).getTime(); // Assuming createdAt is a format Date can parse
+      const messageCutoffTime = Date.now() - MESSAGE_MAX_AGE_MS;
+
+      // Check if message is too old or already processed
+      if (messageTime < messageCutoffTime || processedMessageIds.includes(messageId)) {
+        pluginLogger.debug(`Skipping message ${messageId}: Old or already processed.`);
+        return;
+      }
+
+      // Use the senderName directly from the message if available, otherwise look up
+      const sender = userListBasicInf.data.user.find(u => u.userId === senderId);
+      const senderName = messageSenderName || sender?.name || '???'; // Prioritize name from message
+
+      pluginLogger.info('Processing new message event:', newMessage);
+      pluginLogger.info(`Received message from ${senderName} (${senderId}): ${messageText}`);
+      const words = extractWords(messageText); // Note: 'words' is extracted but not used currently. Keep or remove based on future needs.
+
+      if (messageText) {
+        const formattedMessage = (
+          <>
+            <strong>{senderName}:</strong> {messageText}
+          </>
+        );
+
+        setActiveMessages((prevMessages) => [
+          ...prevMessages,
+          { id: messageId, content: formattedMessage },
+        ]);
+
+        setProcessedMessageIds(prevIds => [messageId, ...prevIds].slice(0, 5));
+
+        if (messageTimeoutsRef.current[messageId]) {
+          clearTimeout(messageTimeoutsRef.current[messageId]);
+        }
+
+        messageTimeoutsRef.current[messageId] = setTimeout(() => {
+          removeMessage(messageId);
+        }, WORD_DISPLAY_DURATION_MS);
+      } else {
+        pluginLogger.warn('Received chat message event without valid text:', newMessage);
+      }
+    }
+    // Depend on the data part of the response/info objects for better performance
+  }, [subscriptionResponse.data, userListBasicInf.data, processedMessageIds]);
 
   const removeMessage = (messageIdToRemove: string) => {
     setActiveMessages((prevMessages) =>
@@ -51,59 +116,6 @@ function PluginChatOverlay(
       delete messageTimeoutsRef.current[messageIdToRemove];
     }
   };
-
-  useEffect(() => {
-    if (response.data) {
-      const latestMessageEvents = response.data;
-
-      const messageCutoffTime = Date.now() - MESSAGE_MAX_AGE_MS;
-
-      latestMessageEvents.forEach(event => {
-        if (event?.message && event.messageId && event.createdAt) {
-          if (new Date(event.createdAt).getTime() < messageCutoffTime || processedMessageIds.includes(event.messageId)) {
-            return;
-          }
-
-          pluginLogger.info('Processing recent message event metadata:', event.messageMetadata);
-
-          const messageText = event.message;
-          const senderUserId = event.senderUserId;
-          const messageId = event.messageId;
-
-          const sender = userListBasicInf.data?.user?.find(u => u.userId === senderUserId);
-          const senderName = sender?.name ?? '???';
-
-          pluginLogger.info(`Received message from ${senderName} (${senderUserId}): ${messageText}`);
-          const words = extractWords(messageText);
-
-          if (messageText) {
-            const formattedMessage = (
-              <>
-                <strong>{senderName}:</strong> {messageText}
-              </>
-            );
-
-            setActiveMessages((prevMessages) => [
-              ...prevMessages,
-              { id: messageId, content: formattedMessage },
-            ]);
-
-            setProcessedMessageIds(prevIds => [messageId, ...prevIds].slice(0, 5));
-
-            if (messageTimeoutsRef.current[messageId]) {
-              clearTimeout(messageTimeoutsRef.current[messageId]);
-            }
-
-            messageTimeoutsRef.current[messageId] = setTimeout(() => {
-              removeMessage(messageId);
-            }, WORD_DISPLAY_DURATION_MS);
-          }
-        } else {
-          pluginLogger.warn('Received chat message event without valid message/ID/createdAt:', event);
-        }
-      });
-    }
-  }, [response, userListBasicInf]);
 
   const messageListContainerStyle: React.CSSProperties = {
     position: 'fixed',
