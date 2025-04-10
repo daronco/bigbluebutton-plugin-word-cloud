@@ -19,9 +19,26 @@ interface WordData extends cloud.Word {
   // text and size are already part of cloud.Word
 }
 
+// Regex to match various emoji presentations, including flags and variation selectors
+// Using Unicode property escapes: \p{Emoji_Presentation}, \p{Emoji} with VS16, Regional Indicators for flags
+const emojiIsolatingRegex = /(\p{Emoji_Presentation}|\p{Emoji}\uFE0F|(?:\p{Regional_Indicator}\p{Regional_Indicator})+|\p{Emoji})/gu;
+
 const extractWords = (text: string): string[] => {
   if (!text) return [];
-  return text.toLowerCase().replace(/[.,!?;:]/g, '').split(/\s+/).filter(word => word.length > 0);
+
+  // 1. Isolate emojis by adding spaces around them
+  const spacedText = text.replace(emojiIsolatingRegex, ' $1 ');
+
+  // 2. Convert to lowercase (emojis are generally unaffected, but standard words are)
+  const lowerCaseText = spacedText.toLowerCase();
+
+  // 3. Remove common punctuation
+  const noPunctuationText = lowerCaseText.replace(/[.,!?;:]/g, '');
+
+  // 4. Split by whitespace and filter out empty strings
+  const words = noPunctuationText.split(/\s+/).filter(word => word.length > 0);
+
+  return words;
 };
 
 export function PluginWordCloud({ pluginUuid }: PluginWordCloudProps):
@@ -35,7 +52,7 @@ React.ReactElement<PluginWordCloudProps> {
   const [categorizedWordCounts, setCategorizedWordCounts] = useState<Record<string, Record<string, number>>>({});
   // State to keep track of processed message IDs to avoid duplicates
   const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
-  // State to track the current category index, incremented by "/next"
+  // State to track the current category index, incremented by "/cloud"
   const [currentCategoryIndex, setCurrentCategoryIndex] = useState<number>(0);
   // Ref for the container div where D3 will render the SVG
   const svgRef = useRef<HTMLDivElement>(null);
@@ -77,9 +94,9 @@ React.ReactElement<PluginWordCloudProps> {
         setProcessedMessageIds(prevIds => new Set(prevIds).add(messageId));
         updated = true; // Mark that we are processing new data
 
-        // --- Check for /next command ---
-        if (messageText.trim() === '/next') {
-          pluginLogger.info(`Received /next command. Incrementing category index.`);
+        // --- Check for /cloud command ---
+        if (messageText.trim() === '/cloud') {
+          pluginLogger.info(`Received /cloud command. Incrementing category index.`);
           setCurrentCategoryIndex(prevIndex => prevIndex + 1);
           // Do not process this message for words
           return; // Skip to the next message
@@ -129,7 +146,7 @@ React.ReactElement<PluginWordCloudProps> {
 
   // Define min/max font sizes
   const minFontSize = 24;
-  const maxFontSize = 98;
+  const maxFontSize = 120;
   // Color parameters removed - will use d3.schemeCategory10
 
   // Calculate min and max counts for normalization (still needed for font size)
