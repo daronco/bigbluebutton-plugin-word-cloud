@@ -12,12 +12,11 @@ import {
 } from './types';
 import { PUBLIC_CHAT_MESSAGES_SUBSCRIPTION } from './queries';
 
-// Define an interface for the word data including the count, extending d3-cloud's Word
+// Define an interface for the word data including the count and category, extending d3-cloud's Word
 interface WordData extends cloud.Word {
   count: number;
-  // text and size are already part of cloud.Word, but we can redefine for clarity if needed
-  // text: string;
-  // size: number;
+  category: string; // Added category field
+  // text and size are already part of cloud.Word
 }
 
 const extractWords = (text: string): string[] => {
@@ -224,25 +223,90 @@ React.ReactElement<PluginWordCloudProps> {
       text,
       size: calculateDynamicFontSize(count), // Use the new dynamic font size calculation
       count, // Keep original count if needed elsewhere
+      category: text.length > 0 ? text[0].toLowerCase() : '', // Assign category based on the first letter
       // Initialize d3-cloud properties (optional, layout calculates them)
       // x: 0, y: 0, rotate: 0,
     }));
 
-    const layout = cloud()
-      .size([layoutWidth, layoutHeight]) // Use calculated layout size
-      .words(wordsData)
-      .padding(2) // Reduced padding for closer words
-      //.rotate(() => ~~(Math.random() * 2) * 90) // Rotate words 0 or 90 degrees randomly
-      .rotate(() => (~~(Math.random() * 6) - 3) * 30) // More varied rotation like original example
-      .font('Tahoma') // Example font, choose one appropriate
-      .fontSize((d: cloud.Word) => d.size || 12) // Added explicit type cloud.Word for 'd'
-      .on('end', (drawnWords: WordData[]) => draw(drawnWords, width, height, margin)); // Pass dimensions and margin to draw
+    // --- Category-Based Layout ---
+    const wordsByCategory = wordsData.reduce((acc, word) => {
+      const category = word.category;
+      if (!acc[category]) {
+        acc[category] = [];
+      }
+      acc[category].push(word);
+      return acc;
+    }, {} as Record<string, WordData[]>);
 
-    layout.start();
+    const categories = Object.keys(wordsByCategory);
+    const numCategories = categories.length;
+
+    if (numCategories === 0) {
+      pluginLogger.warn('No categories found, skipping layout.');
+      // Potentially draw placeholder or clear SVG if needed, though handled earlier
+      return;
+    }
+
+    // Calculate grid dimensions
+    const cols = Math.ceil(Math.sqrt(numCategories));
+    const rows = Math.ceil(numCategories / cols);
+    const cellWidth = layoutWidth / cols;
+    const cellHeight = layoutHeight / rows;
+
+    pluginLogger.debug(`Grid: ${cols}x${rows}, Cell: ${cellWidth.toFixed(1)}x${cellHeight.toFixed(1)}`);
+
+    const allLayoutPromises: Promise<WordData[]>[] = [];
+    const allPositionedWords: WordData[] = []; // Array to collect results
+
+    categories.forEach((category, index) => {
+      const categoryWords = wordsByCategory[category];
+      if (!categoryWords || categoryWords.length === 0) return; // Skip empty categories
+
+      const colIndex = index % cols;
+      const rowIndex = Math.floor(index / cols);
+      const offsetX = colIndex * cellWidth;
+      const offsetY = rowIndex * cellHeight;
+
+      pluginLogger.debug(`Layout for category '${category}' in cell [${rowIndex}, ${colIndex}] offset (${offsetX.toFixed(1)}, ${offsetY.toFixed(1)})`);
+
+      const layoutPromise = new Promise<WordData[]>((resolve) => {
+        const categoryLayout = cloud<WordData>() // Specify WordData type here
+          .size([cellWidth, cellHeight])
+          .words(categoryWords) // Pass only words for this category
+          .padding(1) // Maybe smaller padding within cells
+          .rotate(() => (~~(Math.random() * 6) - 3) * 15) // Less rotation?
+          .font('Tahoma')
+          .fontSize(d => d.size || 10) // Use size from WordData
+          .on('end', (positionedWords: WordData[]) => {
+            // Adjust positions relative to the cell's offset
+            const adjustedWords = positionedWords.map(word => ({
+              ...word,
+              x: (word.x || 0) + offsetX + cellWidth / 2, // Center within cell + offset
+              y: (word.y || 0) + offsetY + cellHeight / 2, // Center within cell + offset
+            }));
+            pluginLogger.debug(`Layout finished for category '${category}', ${adjustedWords.length} words positioned.`);
+            resolve(adjustedWords);
+          });
+        categoryLayout.start();
+      });
+      allLayoutPromises.push(layoutPromise);
+    });
+
+    // Wait for all category layouts to complete
+    Promise.all(allLayoutPromises).then(results => {
+      const combinedWords = results.flat(); // Combine words from all categories
+      pluginLogger.info(`All category layouts finished. Total words: ${combinedWords.length}`);
+      draw(combinedWords, width, height, margin); // Call draw with all positioned words
+    }).catch(error => {
+      pluginLogger.error('Error during category layout:', error);
+    });
+    // --- End Category-Based Layout ---
+
 
     // Draw function: Renders the words using D3, now receives dimensions/margin
+    // This function remains largely the same, but now receives words already positioned globally
     function draw(words: WordData[], svgWidth: number, svgHeight: number, svgMargin: number) {
-      pluginLogger.debug('D3 layout finished, drawing words:', words.length);
+      pluginLogger.debug('Drawing combined words:', words.length);
 
       // Select the container, ensure SVG exists, or create it
       const svg = d3.select(svgRef.current)
@@ -257,7 +321,8 @@ React.ReactElement<PluginWordCloudProps> {
       const g = svg.selectAll<SVGGElement, unknown>('g')
         .data([null])
         .join('g')
-          .attr('transform', `translate(${width/2}, ${height/2})`); // Translate by margin
+          // Translate group by the margin, as word coords are now relative to layout area top-left
+          .attr('transform', `translate(${svgMargin}, ${svgMargin})`);
 
       // D3 data join for text elements, using WordData
       const text = g.selectAll<SVGTextElement, WordData>('text')
@@ -274,17 +339,19 @@ React.ReactElement<PluginWordCloudProps> {
       // --- Update Selection ---
       text.transition() // Smoothly transition existing words
         .duration(1600) // Match previous transition duration
-        .attr('transform', d => `translate(${d.x || 0},${d.y || 0}) rotate(${d.rotate || 0})`) // Add fallbacks for safety
+         // Use calculated x, y directly; they already include offsets
+        .attr('transform', d => `translate(${d.x || 0},${d.y || 0}) rotate(${d.rotate || 0})`)
         .attr('font-size', d => `${d.size}px`)
-        .style('fill', d => colorScale(d.text || '')); // Use color scale based on word text
+        .style('fill', d => colorScale(d.category)); // Use color scale based on category
 
       // --- Enter Selection ---
       text.enter() // Add text.enter() back here
         .append('text')
           .style('font-family', 'Impact') // Match font used in layout
-          .style('fill', (d: WordData) => colorScale(d.text || '')) // Use color scale based on word text
+          .style('fill', (d: WordData) => colorScale(d.category)) // Use color scale based on category
           .attr('text-anchor', 'middle')
-          .attr('transform', (d: WordData) => `translate(${d.x || 0},${d.y || 0}) rotate(${d.rotate || 0})`) // Add type WordData
+           // Use calculated x, y directly for initial position
+          .attr('transform', (d: WordData) => `translate(${d.x || 0},${d.y || 0}) rotate(${d.rotate || 0})`)
           .text((d: WordData) => d.text || '') // Add type WordData
           // Initial state for transition
           .style('fill-opacity', 1e-6) // Start transparent for fade-in
@@ -298,9 +365,9 @@ React.ReactElement<PluginWordCloudProps> {
     }
 
     // Cleanup function for when the component unmounts or dependencies change
+    // No explicit layout.stop() needed here as layouts are created/run within the Promise scope
     return () => {
-      layout.stop(); // Stop the layout process if it's still running
-      pluginLogger.debug('D3 layout stopped on cleanup.');
+      pluginLogger.debug('Cleanup triggered for word cloud effect.');
     };
 
   }, [wordCounts, dimensions]); // Re-run effect when wordCounts or dimensions change
