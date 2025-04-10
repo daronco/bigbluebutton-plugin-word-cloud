@@ -345,6 +345,25 @@ React.ReactElement<PluginWordCloudProps> {
     });
     // --- End Category-Based Layout ---
 
+    // Helper function to ensure color is not too dark
+    const ensureLightColor = (colorString: string): string => {
+      const darkThreshold = 0x66; // Equivalent to #666666
+      const defaultLightColor = '#cccccc';
+      try {
+        const color = d3.color(colorString);
+        if (!color) return defaultLightColor; // Fallback if color parsing fails
+
+        const { r, g, b } = color.rgb();
+        // Check if all components are below the threshold
+        if (r <= darkThreshold && g <= darkThreshold && b <= darkThreshold) {
+          return defaultLightColor; // Return light grey if too dark
+        }
+        return colorString; // Return original color if light enough
+      } catch (e) {
+        pluginLogger.warn('Could not parse color string:', colorString, e);
+        return defaultLightColor; // Fallback on error
+      }
+    };
 
     // Draw function: Renders the words using D3, now receives dimensions/margin
     // This function remains largely the same, but now receives words already positioned globally
@@ -367,6 +386,9 @@ React.ReactElement<PluginWordCloudProps> {
           // Translate group by the margin, as word coords are now relative to layout area top-left
           .attr('transform', `translate(${svgMargin}, ${svgMargin})`);
 
+      // Define color scale within draw function scope to use helper
+      const colorScale = d3.scaleOrdinal(d3.schemeCategory10);
+
       // D3 data join for text elements, using WordData
       const text = g.selectAll<SVGTextElement, WordData>('text')
         .data(words, d => d.text || ''); // Use word text as key
@@ -385,13 +407,15 @@ React.ReactElement<PluginWordCloudProps> {
          // Use calculated x, y directly; they already include offsets
         .attr('transform', d => `translate(${d.x || 0},${d.y || 0}) rotate(${d.rotate || 0})`)
         .attr('font-size', d => `${d.size}px`)
-        .style('fill', d => colorScale(d.text || '')); // Use color scale based on WORD TEXT
+        // Ensure the fill color is light enough
+        .style('fill', d => ensureLightColor(colorScale(d.text || '')));
 
       // --- Enter Selection ---
       text.enter() // Add text.enter() back here
         .append('text')
           .style('font-family', 'Impact') // Match font used in layout
-          .style('fill', (d: WordData) => colorScale(d.text || '')) // Use color scale based on WORD TEXT
+          // Ensure the initial fill color is light enough
+          .style('fill', (d: WordData) => ensureLightColor(colorScale(d.text || '')))
           .attr('text-anchor', 'middle')
            // Use calculated x, y directly for initial position
           .attr('transform', (d: WordData) => `translate(${d.x || 0},${d.y || 0}) rotate(${d.rotate || 0})`)
