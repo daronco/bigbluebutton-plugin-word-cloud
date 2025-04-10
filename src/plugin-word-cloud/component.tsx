@@ -29,10 +29,14 @@ React.ReactElement<PluginWordCloudProps> {
   BbbPluginSdk.initialize(pluginUuid);
   const pluginApi = BbbPluginSdk.getPluginApi(pluginUuid);
 
-  // State to store word counts
+  // State to store GLOBAL word counts (for font size)
   const [wordCounts, setWordCounts] = useState<Record<string, number>>({});
+  // State to store word counts PER CATEGORY (minute) (for layout grouping)
+  const [categorizedWordCounts, setCategorizedWordCounts] = useState<Record<string, Record<string, number>>>({});
   // State to keep track of processed message IDs to avoid duplicates
   const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
+  // State to track the current category index, incremented by "/next"
+  const [currentCategoryIndex, setCurrentCategoryIndex] = useState<number>(0);
   // Ref for the container div where D3 will render the SVG
   const svgRef = useRef<HTMLDivElement>(null);
   // State to store container dimensions for responsive layout
@@ -66,31 +70,56 @@ React.ReactElement<PluginWordCloudProps> {
           return; // Skip this message
         }
 
+        // Destructure needed fields
         const { messageId, message: messageText } = message;
 
         // Mark message as processed immediately
         setProcessedMessageIds(prevIds => new Set(prevIds).add(messageId));
         updated = true; // Mark that we are processing new data
 
-        pluginLogger.info(`Processing message ${messageId}: ${messageText}`);
+        // --- Check for /next command ---
+        if (messageText.trim() === '/next') {
+          pluginLogger.info(`Received /next command. Incrementing category index.`);
+          setCurrentCategoryIndex(prevIndex => prevIndex + 1);
+          // Do not process this message for words
+          return; // Skip to the next message
+        }
+
+        // --- Process regular message ---
+        const currentCategory = String(currentCategoryIndex); // Use current index as category string
+        pluginLogger.info(`Processing message ${messageId} for category ${currentCategory}: ${messageText}`);
         const words = extractWords(messageText);
 
         if (words.length > 0) {
-          // Update word counts using functional update
-          setWordCounts(prevCounts => {
-            const newCounts = { ...prevCounts };
+          // Update GLOBAL word counts
+          setWordCounts(prevGlobalCounts => {
+            const newGlobalCounts = { ...prevGlobalCounts };
             words.forEach(word => {
-              newCounts[word] = (newCounts[word] || 0) + 1;
+              newGlobalCounts[word] = (newGlobalCounts[word] || 0) + 1;
             });
-            return newCounts;
+            return newGlobalCounts;
           });
+
+          // Update CATEGORIZED word counts using the currentCategory string
+          setCategorizedWordCounts(prevCategorizedCounts => {
+            const newCategorizedCounts = { ...prevCategorizedCounts };
+            // Ensure the category entry exists
+            if (!newCategorizedCounts[currentCategory]) {
+              newCategorizedCounts[currentCategory] = {};
+            }
+            words.forEach(word => {
+              newCategorizedCounts[currentCategory][word] = (newCategorizedCounts[currentCategory][word] || 0) + 1;
+            });
+            return newCategorizedCounts;
+          });
+
         } else {
-          pluginLogger.debug(`No words extracted from message ${messageId}`);
+          pluginLogger.debug(`No words extracted from message ${messageId} for category ${currentCategory}`);
         }
       });
 
       if (updated) {
-        pluginLogger.info('Word counts updated.');
+        pluginLogger.info('Global and categorized word counts updated.');
       }
     }
     // Depend only on the subscription data
@@ -136,6 +165,10 @@ React.ReactElement<PluginWordCloudProps> {
 
   // Effect to run D3 layout when wordCounts or dimensions change
   useEffect(() => {
+    // Store layout instance reference for cleanup
+    // Correct type for the layout instance returned by cloud()
+    let layoutInstance = null;
+
     const [width, height] = dimensions; // Get current dimensions from state
 
     if (!svgRef.current || width === 0 || height === 0) {
@@ -218,17 +251,27 @@ React.ReactElement<PluginWordCloudProps> {
       return Math.max(effectiveMinFontSize, Math.min(size, maxFontSize));
     };
 
-    // Prepare data for d3-cloud, explicitly typing as WordData[]
-    const wordsData: WordData[] = Object.entries(wordCounts).map(([text, count]) => ({
-      text,
-      size: calculateDynamicFontSize(count), // Use the new dynamic font size calculation
-      count, // Keep original count if needed elsewhere
-      category: text.length > 0 ? text[0].toLowerCase() : '', // Assign category based on the first letter
-      // Initialize d3-cloud properties (optional, layout calculates them)
-      // x: 0, y: 0, rotate: 0,
-    }));
+    // Prepare data for d3-cloud from categorized counts
+    // Each entry represents a unique word within a specific category (minute)
+    const wordsData: WordData[] = [];
+    Object.entries(categorizedWordCounts).forEach(([category, wordsInCategory]) => {
+      Object.entries(wordsInCategory).forEach(([wordText, countInCategory]) => {
+        // Get the GLOBAL count for font size calculation
+        const globalCount = wordCounts[wordText] || 1; // Fallback to 1 if somehow missing
+        wordsData.push({
+          text: wordText,
+          size: calculateDynamicFontSize(globalCount), // Size based on GLOBAL count
+          count: globalCount, // Store global count in WordData for consistency with size
+          category: category, // The category index string ('0', '1', '2', ...)
+          // Let d3-cloud calculate x, y, rotate etc.
+        });
+      });
+    });
+
+    pluginLogger.debug(`Prepared ${wordsData.length} WordData entries for layout.`);
 
     // --- Category-Based Layout ---
+    // Group the generated wordsData by category (minute string)
     const wordsByCategory = wordsData.reduce((acc, word) => {
       const category = word.category;
       if (!acc[category]) {
@@ -342,13 +385,13 @@ React.ReactElement<PluginWordCloudProps> {
          // Use calculated x, y directly; they already include offsets
         .attr('transform', d => `translate(${d.x || 0},${d.y || 0}) rotate(${d.rotate || 0})`)
         .attr('font-size', d => `${d.size}px`)
-        .style('fill', d => colorScale(d.category)); // Use color scale based on category
+        .style('fill', d => colorScale(d.text || '')); // Use color scale based on WORD TEXT
 
       // --- Enter Selection ---
       text.enter() // Add text.enter() back here
         .append('text')
           .style('font-family', 'Impact') // Match font used in layout
-          .style('fill', (d: WordData) => colorScale(d.category)) // Use color scale based on category
+          .style('fill', (d: WordData) => colorScale(d.text || '')) // Use color scale based on WORD TEXT
           .attr('text-anchor', 'middle')
            // Use calculated x, y directly for initial position
           .attr('transform', (d: WordData) => `translate(${d.x || 0},${d.y || 0}) rotate(${d.rotate || 0})`)
@@ -365,12 +408,17 @@ React.ReactElement<PluginWordCloudProps> {
     }
 
     // Cleanup function for when the component unmounts or dependencies change
-    // No explicit layout.stop() needed here as layouts are created/run within the Promise scope
     return () => {
       pluginLogger.debug('Cleanup triggered for word cloud effect.');
+      // if (layoutInstance) {
+      //   layoutInstance.stop(); // Stop the layout process if it's still running
+      //   pluginLogger.debug('D3 layout stopped on cleanup.');
+      // } else {
+      //   pluginLogger.debug('Cleanup triggered for word cloud effect (no active layout).');
+      // }
     };
 
-  }, [wordCounts, dimensions]); // Re-run effect when wordCounts or dimensions change
+  }, [wordCounts, categorizedWordCounts, dimensions]); // Re-run effect when counts or dimensions change
 
   // --- Rendering Logic ---
   // Render a div container that D3 will use
