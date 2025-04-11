@@ -2,7 +2,16 @@
 
 ## Description
 
-A brief description of the plugin including a screenshot and/or a short video.
+Display a word cloud formed with the words said in chat.
+
+## Next steps
+
+* [ ] Option to enable and disable the plugin (right now it replaces the presentation area and you can't change it)
+* [ ] Clear the word cloud when the chat is cleared or add an option for the presenter to do so
+* [ ] Better way to start a new cloud (replace the command `/cloud`)
+* [ ] Synchronize the cloud between all participants (at the moment each client renders its own cloud)
+* [ ] Don't need to re-render the cloud every time a resize is triggered, this can be improved
+* [ ] This plugin can become a bigger one: collect input from users (not only from chat, there are several options) and display them (not only as a word cloud, there are many ways to show data visually)
 
 ## Building the Plugin
 
