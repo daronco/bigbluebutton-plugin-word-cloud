@@ -41,6 +41,29 @@ const extractWords = (text: string): string[] => {
   return words;
 };
 
+// Helper function to ensure color is not too dark
+const ensureLightColor = (colorString: string): string => {
+  const darkThreshold = 0x66; // Equivalent to #666666
+  const defaultLightColor = '#cccccc';
+  try {
+    const color = d3.color(colorString);
+    if (!color) return defaultLightColor; // Fallback if color parsing fails
+
+    const { r, g, b } = color.rgb();
+    // Check if all components are below the threshold
+    if (r <= darkThreshold && g <= darkThreshold && b <= darkThreshold) {
+      return defaultLightColor; // Return light grey if too dark
+    }
+    return colorString; // Return original color if light enough
+  } catch (e) {
+    // Use pluginLogger if available, otherwise console.warn
+    const logger = typeof pluginLogger !== 'undefined' ? pluginLogger : console;
+    logger.warn('Could not parse color string:', colorString, e);
+    return defaultLightColor; // Fallback on error
+  }
+};
+
+
 export function PluginWordCloud({ pluginUuid }: PluginWordCloudProps):
 React.ReactElement<PluginWordCloudProps> {
   BbbPluginSdk.initialize(pluginUuid);
@@ -54,6 +77,8 @@ React.ReactElement<PluginWordCloudProps> {
   const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
   // State to track the current category index, incremented by "/cloud"
   const [currentCategoryIndex, setCurrentCategoryIndex] = useState<number>(0);
+  // State to track the current visualization mode ('cloud' or 'chart')
+  const [visualizationMode, setVisualizationMode] = useState<'cloud' | 'chart'>('cloud');
   // Ref for the container div where D3 will render the SVG
   const svgRef = useRef<HTMLDivElement>(null);
   // State to store container dimensions for responsive layout
@@ -94,12 +119,17 @@ React.ReactElement<PluginWordCloudProps> {
         setProcessedMessageIds(prevIds => new Set(prevIds).add(messageId));
         updated = true; // Mark that we are processing new data
 
-        // --- Check for /cloud command ---
-        if (messageText.trim() === '/cloud') {
-          pluginLogger.info(`Received /cloud command. Incrementing category index.`);
+        // --- Check for commands ---
+        const trimmedMessage = messageText.trim();
+        if (trimmedMessage === '/cloud') {
+          pluginLogger.info(`Received /cloud command. Switching to cloud view and incrementing category index.`);
+          setVisualizationMode('cloud');
           setCurrentCategoryIndex(prevIndex => prevIndex + 1);
-          // Do not process this message for words
-          return; // Skip to the next message
+          return; // Skip processing words for this command
+        } else if (trimmedMessage === '/chart') {
+          pluginLogger.info(`Received /chart command. Switching to chart view.`);
+          setVisualizationMode('chart');
+          return; // Skip processing words for this command
         }
 
         // --- Process regular message ---
@@ -193,8 +223,9 @@ React.ReactElement<PluginWordCloudProps> {
       return; // Don't run if ref isn't ready or dimensions are zero
     }
 
+    // --- Handle Placeholder ---
+    // Check for words *before* deciding cloud or chart
     if (Object.keys(wordCounts).length === 0) {
-      // Handle the "no words" case - draw placeholder
       pluginLogger.debug('No words, drawing placeholder.');
       // Remove any existing SVG (either word cloud or placeholder)
       d3.select(svgRef.current).select('svg').remove();
@@ -217,15 +248,17 @@ React.ReactElement<PluginWordCloudProps> {
         .text('Type something in chat!');
 
       return; // Exit after drawing placeholder
+    } else {
+      // Clear placeholder if words exist now
+      d3.select(svgRef.current).select('.no-messages-placeholder-svg').remove();
     }
+    // --- End Handle Placeholder ---
 
-    // --- Proceed with Word Cloud Drawing ---
-    pluginLogger.debug(`Running D3 layout with dimensions: ${width}x${height}`);
 
-    // Clear any placeholder SVG if it exists
-    d3.select(svgRef.current).select('.no-messages-placeholder-svg').remove();
+    // --- Proceed with Selected Visualization ---
+    pluginLogger.debug(`Rendering visualization: ${visualizationMode} with dimensions: ${width}x${height}`);
 
-    // Define margin and calculate layout area
+    // Define margin and calculate layout area (used by both modes)
     const margin = 10; // Define margin in pixels
     const layoutWidth = width - margin * 2;
     const layoutHeight = height - margin * 2;
@@ -236,9 +269,13 @@ React.ReactElement<PluginWordCloudProps> {
       return;
     }
 
-    // --- Dynamic Font Size Calculation ---
-    const numUniqueWords = Object.keys(wordCounts).length;
-    const wordCountThreshold = 20; // Threshold for adjusting min font size
+    if (visualizationMode === 'cloud') {
+      // --- Word Cloud Layout Logic ---
+      pluginLogger.debug('Starting word cloud layout process.');
+
+      // --- Dynamic Font Size Calculation ---
+      const numUniqueWords = Object.keys(wordCounts).length;
+      const wordCountThreshold = 20; // Threshold for adjusting min font size
     let effectiveMinFontSize = minFontSize; // Start with the default min size
 
     if (numUniqueWords > 0 && numUniqueWords < wordCountThreshold) {
@@ -356,36 +393,42 @@ React.ReactElement<PluginWordCloudProps> {
     Promise.all(allLayoutPromises).then(results => {
       const combinedWords = results.flat(); // Combine words from all categories
       pluginLogger.info(`All category layouts finished. Total words: ${combinedWords.length}`);
-      draw(combinedWords, width, height, margin); // Call draw with all positioned words
+      drawCloud(combinedWords, width, height, margin); // Call drawCloud with all positioned words
     }).catch(error => {
       pluginLogger.error('Error during category layout:', error);
     });
-    // --- End Category-Based Layout ---
+    // --- End Word Cloud Layout ---
 
-    // Helper function to ensure color is not too dark
-    const ensureLightColor = (colorString: string): string => {
-      const darkThreshold = 0x66; // Equivalent to #666666
-      const defaultLightColor = '#cccccc';
-      try {
-        const color = d3.color(colorString);
-        if (!color) return defaultLightColor; // Fallback if color parsing fails
+    } else if (visualizationMode === 'chart') {
+      // --- Bar Chart Logic ---
+      pluginLogger.debug('Preparing data for bar chart.');
 
-        const { r, g, b } = color.rgb();
-        // Check if all components are below the threshold
-        if (r <= darkThreshold && g <= darkThreshold && b <= darkThreshold) {
-          return defaultLightColor; // Return light grey if too dark
-        }
-        return colorString; // Return original color if light enough
-      } catch (e) {
-        pluginLogger.warn('Could not parse color string:', colorString, e);
-        return defaultLightColor; // Fallback on error
+      // 1. Prepare data: Get top N words based on global count
+      const topN = 20; // Show top 20 words, adjust as needed
+      const chartData = Object.entries(wordCounts)
+        .sort(([, countA], [, countB]) => countB - countA) // Sort descending by count
+        .slice(0, topN) // Take top N
+        .map(([text, count]) => ({ text, count })); // Map to object array
+
+      pluginLogger.debug(`Prepared ${chartData.length} entries for bar chart.`);
+
+      if (chartData.length === 0) {
+         pluginLogger.warn('No data for chart, skipping draw.');
+         // Placeholder logic is handled earlier, just return
+         return;
       }
-    };
 
-    // Draw function: Renders the words using D3, now receives dimensions/margin
-    // This function remains largely the same, but now receives words already positioned globally
-    function draw(words: WordData[], svgWidth: number, svgHeight: number, svgMargin: number) {
-      pluginLogger.debug('Drawing combined words:', words.length);
+      drawChart(chartData, width, height); // Removed the 4th argument (margin)
+      // --- End Bar Chart Logic ---
+    }
+
+
+    // --- Helper Functions ---
+    // Moved ensureLightColor outside the useEffect hook
+
+    // Draw function for Word Cloud: Renders the words using D3
+    function drawCloud(words: WordData[], svgWidth: number, svgHeight: number, svgMargin: number) {
+      pluginLogger.debug('Drawing word cloud:', words.length);
 
       // Select the container, ensure SVG exists, or create it
       const svg = d3.select(svgRef.current)
@@ -396,8 +439,11 @@ React.ReactElement<PluginWordCloudProps> {
           .attr('height', svgHeight) // Use passed height
           .style('background-color', '#000000'); // Set background to black
 
+      // Clear previous contents (important when switching modes)
+      svg.selectAll('*').remove();
+
       // Select the main group element, translate by the margin
-      const g = svg.selectAll<SVGGElement, unknown>('g')
+      const g = svg.append('g') // Use append since we cleared content
         .data([null])
         .join('g')
           // Translate group by the margin, as word coords are now relative to layout area top-left
@@ -445,8 +491,112 @@ React.ReactElement<PluginWordCloudProps> {
           .style('fill-opacity', 1)
           .attr('font-size', (d: WordData) => `${d.size}px`); // Add type WordData
 
-      pluginLogger.debug('D3 drawing complete.');
+      pluginLogger.debug('Word cloud drawing complete.');
     }
+
+    // Draw function for Bar Chart
+    function drawChart(data: { text: string, count: number }[], svgWidth: number, svgHeight: number, /* svgMargin is passed but we'll use a larger fixed margin here */) {
+      pluginLogger.debug('Drawing bar chart:', data.length);
+
+      // Increase margin for more padding around the chart
+      const margin = { top: 40, right: 40, bottom: 80, left: 60 }; // Increased top/right/bottom/left margins
+
+      const chartWidth = svgWidth - margin.left - margin.right;
+      const chartHeight = svgHeight - margin.top - margin.bottom;
+
+      // Select the container, ensure SVG exists, or create it
+      const svg = d3.select(svgRef.current)
+        .selectAll<SVGSVGElement, unknown>('svg')
+        .data([null])
+        .join('svg')
+          .attr('width', svgWidth)
+          .attr('height', svgHeight)
+          .style('background-color', '#000000'); // Set background
+
+      // Clear previous contents (important when switching modes)
+      svg.selectAll('*').remove();
+
+      // Create main group, translated by the new margin object
+      const g = svg.append('g')
+          .attr('transform', `translate(${margin.left}, ${margin.top})`);
+
+      // Define color scale (can reuse the same one)
+      const colorScale = d3.scaleOrdinal(d3.schemeCategory10);
+
+      // --- Scales ---
+      const xScale = d3.scaleBand()
+        .domain(data.map(d => d.text))
+        .range([0, chartWidth])
+        .padding(0.2); // Padding between bars, adjusted from example
+
+      const yScale = d3.scaleLinear()
+        .domain([0, d3.max(data, d => d.count) || 1]) // Max count or 1 if empty
+        .range([chartHeight, 0]); // Inverted range for SVG y-coordinate
+
+      // --- Axes ---
+      const xAxis = d3.axisBottom(xScale);
+      const yAxis = d3.axisLeft(yScale);
+
+      // Append X axis
+      g.append('g')
+        .attr('class', 'x-axis')
+        .attr('transform', `translate(0, ${chartHeight})`)
+        .call(xAxis)
+        .selectAll('text') // Style axis text
+          .style('fill', '#ccc')
+          .style('font-size', '16px') // Set font size to 16px
+          .attr('transform', 'translate(-10,0)rotate(-45)') // Rotate labels like example
+          .style('text-anchor', 'end');
+
+      // Append Y axis
+      g.append('g')
+        .attr('class', 'y-axis')
+        // Apply integer formatting to the axis ticks
+        .call(yAxis.tickFormat(d3.format("d")))
+        .selectAll('text') // Style axis text
+          .style('fill', '#ccc')
+          .style('font-size', '16px'); // Set font size to 16px
+
+      // Style axis lines and ticks
+      g.selectAll('.domain, .tick line').style('stroke', '#666');
+
+      // --- Bars ---
+      const bars = g.selectAll(".bar") // Select by class instead of "mybar"
+        // Explicitly type 'd' in the key function
+        .data(data, (d: { text: string, count: number }) => d.text);
+
+      // Exit
+      bars.exit()
+        .transition().duration(500)
+        .attr('y', chartHeight)
+        .attr('height', 0)
+        .style('opacity', 0)
+        .remove();
+
+      // Update
+      bars.transition().duration(500)
+        .attr('x', d => xScale(d.text) || 0)
+        .attr('y', d => yScale(d.count))
+        .attr('width', xScale.bandwidth())
+        .attr('height', d => chartHeight - yScale(d.count))
+        .style('fill', d => ensureLightColor(colorScale(d.text))); // Use helper
+
+      // Enter - Use join pattern like v6 example
+      bars.enter()
+        .append('rect')
+          .attr('class', 'bar')
+          .attr('x', d => xScale(d.text) || 0)
+          .attr('y', chartHeight) // Start from bottom
+          .attr('width', xScale.bandwidth())
+          .attr('height', 0) // Start with zero height
+          .style('fill', d => ensureLightColor(colorScale(d.text))) // Use helper
+        .transition().duration(500) // Animate entrance
+          .attr('y', d => yScale(d.count))
+          .attr('height', d => chartHeight - yScale(d.count));
+
+      pluginLogger.debug('Bar chart drawing complete.');
+    }
+
 
     // Cleanup function for when the component unmounts or dependencies change
     return () => {
@@ -459,7 +609,7 @@ React.ReactElement<PluginWordCloudProps> {
       // }
     };
 
-  }, [wordCounts, categorizedWordCounts, dimensions]); // Re-run effect when counts or dimensions change
+  }, [wordCounts, categorizedWordCounts, dimensions, visualizationMode]); // Added visualizationMode
 
   // --- Rendering Logic ---
   // Render a div container that D3 will use
